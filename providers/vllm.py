@@ -13,7 +13,7 @@ from termcolor import colored
 from tools.logger import get_logger
 
 
-def _test_vllm_response(endpoint: str, port: str, llm_name: str, timeout: int, message: str = "ping", max_new_tokens: int = 1):
+def _test_vllm_response(endpoint: str, port: str, llm_name: str, timeout: int = 30, message: str = "ping", max_new_tokens: int = 1):
     payload = {
         "model": llm_name,
         "messages": [
@@ -75,8 +75,8 @@ class vllmLanguageModel:
         self.logger = get_logger("vllmLanguageModelLogger")
 
         try:
-            r1 = requests.get(f"{endpoint}:{port}/v1/models", timeout=3)
-            r2 = _test_vllm_response(endpoint, port, llm_name, timeout=3)
+            r1 = requests.get(f"{endpoint}:{port}/v1/models", timeout=30)
+            r2 = _test_vllm_response(endpoint, port, llm_name, timeout=30)
             if r1.status_code == 200 and r2.status_code == 200:
                 self.logger.info(f"✅ vLLM already running and model {llm_name} is fully loaded.")
             else:
@@ -118,7 +118,7 @@ class vllmLanguageModel:
                 temperature=self.temperature,
                 top_p=self.top_p,
                 presence_penalty=self.presence_penalty,
-                max_new_tokens=self.max_new_tokens
+                max_tokens=self.max_new_tokens
             )
             message = res.choices[0].message
             num_input_tokens = getattr(res.usage, "prompt_tokens", 0)

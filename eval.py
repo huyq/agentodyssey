@@ -6,6 +6,7 @@ import shutil
 import random
 import copy
 from tools.logger import get_logger
+from harness import Harness
 
 from utils import dynamic_load_game_class, get_hardware_info, convert_json_to_jsonl
 
@@ -36,12 +37,18 @@ def _ensure_valid_actions(obs):
 
 def build_agent_config(agent_type, common_cfg_kwargs):
     # Lazy-import agent config classes to avoid importing heavy/optional provider SDKs
-    if agent_type in {"VanillaRAGAgent", "Mem0RAGAgent", "RaptorRAGAgent", "VoyagerAgent"}:
+    if agent_type in {"VanillaRAGAgent", "Mem0RAGAgent", "RaptorRAGAgent", "VoyagerAgent", "HarnessRAGAgent"}:
         from agents.rag.rag_agent_config import RAGAgentConfig
         return RAGAgentConfig(**common_cfg_kwargs)
     elif agent_type in {"VanillaParamAgent", "LoRASFTAgent"}:
         from agents.parametric.param_agent_config import ParamAgentConfig
         return ParamAgentConfig(**common_cfg_kwargs)
+    elif agent_type in {"ScaffoldTTTAgent"}:
+        from agents.parametric.scaffold_ttt_agent import ScaffoldTTTConfig
+        return ScaffoldTTTConfig(**common_cfg_kwargs)
+    elif agent_type in {"MemoryToolAgent"}:
+        from harness_v2.agent import MemoryToolConfig
+        return MemoryToolConfig(**common_cfg_kwargs)
     elif agent_type in {"LongContextAgent", "Mem1Agent", "ShortTermMemoryAgent"}:
         from agents.fixed_size.fixed_size_memory_agent_config import FixedSizeMemoryAgentConfig
         return FixedSizeMemoryAgentConfig(**common_cfg_kwargs)
@@ -60,10 +67,13 @@ def instantiate_agent(agent_type, agent_info, AgentCls):
     factory_map = {
         "HumanAgent":              ("agents.human_agent",                          "create_human_agent"),
         "VanillaRAGAgent":         ("agents.rag.vanilla_rag_agent",                "create_vanilla_rag_agent"),
+        "HarnessRAGAgent":         ("agents.rag.harness_rag_agent",                "create_harness_rag_agent"),
         "Mem0RAGAgent":            ("agents.rag.mem0_rag_agent",                   "create_mem0_rag_agent"),
         "RaptorRAGAgent":          ("agents.rag.raptor_rag_agent",                 "create_raptor_rag_agent"),
         "VoyagerAgent":            ("agents.rag.voyager_agent",                    "create_voyager_agent"),
         "LoRASFTAgent":            ("agents.parametric.lora_sft_agent",            "create_lora_sft_agent"),
+        "ScaffoldTTTAgent":        ("agents.parametric.scaffold_ttt_agent",        "create_scaffold_ttt_agent"),
+        "MemoryToolAgent":         ("harness_v2.agent",                            "create_memory_tool_agent"),
         "MPlusAgent":              ("agents.latent.mplus_agent",                   "create_mplus_agent"),
         "MemoryLLMAgent":          ("agents.latent.memoryllm_agent",               "create_memoryllm_agent"),
         "LongContextAgent":        ("agents.long_context_agent",                   "create_long_context_agent"),
@@ -105,6 +115,10 @@ if __name__ == "__main__":
     parser.add_argument("--agent_name", type=str, default="adam_davis", help="Human readable agent name")
     parser.add_argument("--llm_provider", type=str, default=None, choices=["openai", "huggingface", "vllm", "azure", "azure_openai", "claude", "gemini"], help="Which LLM provider to use")
     parser.add_argument("--llm_name", type=str, default=None, help="Name of the LLM to use")
+    parser.add_argument("--disable_llm_think", action="store_true",
+                        help="Disable thinking-mode chat templates on the huggingface provider. "
+                             "Use for reasoning backbones whose thinking text breaks the strict "
+                             "JSON decision format (e.g. Qwen3.5 with strict JSON parsers).")
     parser.add_argument("--enable_short_term_memory", action="store_true")
     parser.add_argument("--short_term_memory_size", type=int, default=5)
     parser.add_argument("--enable_reflection", action="store_true")
@@ -122,6 +136,10 @@ if __name__ == "__main__":
     parser.add_argument("--max_steps", type=int, default=300, help="Maximum number of steps to run in the environment")
     parser.add_argument("--enforce_same_hardware", action="store_true", help="Whether to enforce the same hardware for resumed runs")
     parser.add_argument("--enable_obs_valid_actions", action="store_true", help="Whether to include valid actions in the observation")  # required for RandomAgent
+    parser.add_argument("--enable_harness", action="store_true",
+                        help="Enable the episode-local state ledger, event log, and action validity mask")
+    parser.add_argument("--harness_recent_events", type=int, default=16,
+                        help="Number of recent interaction events exposed by the harness")
     parser.add_argument("--cumulative_config_save", action="store_true", help="Save cumulative env config each step")
     parser.add_argument("--debug", action="store_true", help="(Deprecated) Alias for enabling both --cumulative_agent_log and --cumulative_config_save")
     parser.add_argument("--resume_from_step", type=int, default=None, help="If specified, resume from the given step number")
@@ -158,6 +176,7 @@ if __name__ == "__main__":
             "agent_name": args.agent_name,
             "llm_name": args.llm_name,
             "llm_provider": args.llm_provider,
+            "llm_think": not args.disable_llm_think,
             "enable_short_term_memory": args.enable_short_term_memory,
             "short_term_memory_size": args.short_term_memory_size,
             "enable_reflection": args.enable_reflection,
@@ -198,6 +217,7 @@ if __name__ == "__main__":
         a_name = spec["agent_name"]
         a_llm  = spec.get("llm_name")
         a_prov = spec.get("llm_provider")
+        a_think = spec.get("llm_think", True)
         a_stm  = spec.get("enable_short_term_memory", False)
         a_stms = spec.get("short_term_memory_size", 5)
         a_ref  = spec.get("enable_reflection", False)
@@ -211,6 +231,7 @@ if __name__ == "__main__":
         common_cfg_kwargs = dict(
             llm_name=a_llm,
             llm_provider=a_prov,
+            llm_think=a_think,
             enable_reflection=a_ref,
             enable_summarization=a_sum,
             enable_short_term_memory=a_stm,
@@ -284,6 +305,27 @@ if __name__ == "__main__":
 
     obs = env.reset(from_config=from_config)
     env.update_config(update_env_config=True, update_file=False, cumulative=args.cumulative_config_save)
+    harness = None
+    harness_path = os.path.join(run_dir, "harness.json")
+    if args.enable_harness:
+        if from_config and os.path.exists(harness_path):
+            harness = Harness.load(harness_path)
+            logger.info(f"Loaded harness state from {harness_path}.")
+        else:
+            known_verbs = {
+                agent.id: [action.verb for action in agent.available_actions]
+                for agent in env.agents
+            }
+            harness = Harness(
+                (agent.id for agent in env.agents),
+                max_recent_events=args.harness_recent_events,
+                known_verbs=known_verbs,
+            )
+        obs = {
+            agent_id: harness.observe(agent_id, agent_obs)
+            for agent_id, agent_obs in obs.items()
+        }
+
     if args.enable_obs_valid_actions:
         _ensure_valid_actions(obs)
 
@@ -304,7 +346,16 @@ if __name__ == "__main__":
         # collect per-agent outputs from act()
         for agent in env.agents:
             start_time = time.perf_counter()
-            action_strs[agent.id], num_input_tokens, num_output_tokens, response = agent.act(obs[agent.id])
+            proposed_action, num_input_tokens, num_output_tokens, response = agent.act(obs[agent.id])
+            validation = None
+            if harness is not None:
+                # The mask accepts candidates that parse against the game's
+                # verb space (env-valid semantics) in addition to literal
+                # matches of the env's valid-action subset list.
+                validation = harness.validate_action(agent.id, proposed_action, obs[agent.id])
+                action_strs[agent.id] = validation.action
+            else:
+                action_strs[agent.id] = proposed_action
             end_time = time.perf_counter()
             decision_time = end_time - start_time
             agents_log[agent.id] = {
@@ -315,6 +366,13 @@ if __name__ == "__main__":
                 "decision_time": decision_time,
                 "response": response,
             }
+            if validation is not None:
+                agents_log[agent.id]["proposed_action"] = proposed_action
+                agents_log[agent.id]["action_validation"] = {
+                    "accepted": validation.accepted,
+                    "reason": validation.reason,
+                    "valid_actions": list(validation.valid_actions),
+                }
 
         if args.agent_memory_save_frequency is not None and args.agent_memory_save_frequency > 0:
             if env.steps % args.agent_memory_save_frequency == 0:
@@ -332,6 +390,25 @@ if __name__ == "__main__":
             obs, reward, done, info = env.step(action_strs)
             if args.enable_obs_valid_actions:
                 _ensure_valid_actions(obs)
+
+            if harness is not None:
+                for agent in env.agents:
+                    harness_info = copy.deepcopy(info)
+                    validation = agents_log[agent.id].get("action_validation") or {}
+                    if validation.get("reason") == "masked":
+                        harness_info.setdefault("step_invalid_action", {})[agent.id] = True
+                    harness_result = harness.after_step(
+                        agent.id,
+                        step=env.steps - 1,
+                        action=agents_log[agent.id].get("proposed_action", action_strs[agent.id]),
+                        previous_observation=agents_log[agent.id].get("observation"),
+                        next_observation=obs[agent.id],
+                        reward=reward,
+                        info=harness_info,
+                    )
+                    if harness_result.get("observation") is not None:
+                        obs[agent.id] = harness_result["observation"]
+                harness.save(harness_path)
         except Exception as e:
             logger.error(f"Error during env.step: {e}; Agent actions: {action_strs}")
             raise
@@ -353,6 +430,10 @@ if __name__ == "__main__":
                 "observation": agents_log[agent.id].get("observation"),
                 "response": agents_log[agent.id].get("response"),
             }
+            if harness is not None:
+                combined["proposed_action"] = agents_log[agent.id].get("proposed_action")
+                combined["action_validation"] = agents_log[agent.id].get("action_validation")
+                combined["harness_event"] = harness.event_logs[agent.id].events[-1].to_dict()
             with open(log_path, "a") as f:
                 f.write(json.dumps(combined) + "\n")
 

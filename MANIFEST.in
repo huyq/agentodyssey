@@ -11,5 +11,8 @@ recursive-include games *.py *.json
 # Scripts
 recursive-include scripts *.sh
 
+# TTCL episode-local harness
+recursive-include harness *.py
+
 # Tool data files
 recursive-include tools *.html *.js *.json

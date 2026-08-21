@@ -15,6 +15,7 @@ class LLMAgentConfig:
     temperature: float = 0.7
     presence_penalty: float = 1.5
     top_p: float = 0.8
+    llm_think: bool = True  # enable thinking-mode chat templates on the huggingface provider
     action_prompt: str = "What should I do next? Return only the JSON object."
     available_actions: list[Action] = field(default_factory=list)
 
@@ -88,16 +89,23 @@ Rules:
         except Exception as e:
             # print(f"Error parsing JSON: {e}")
             pass
-        match = re.search(r"\{[\s\S]*\}", cleaned)
-        if not match:
-            parsed = None
-        else:
-            json_str = match.group(0)
+        # Reasoning models often discuss the output format in their thinking
+        # text (including literal braces), so a greedy "first { to last }"
+        # match can capture thinking prose and fail to parse.  Try every '{'
+        # as a candidate JSON start, right-to-left (the true object is the
+        # last self-contained one), and return the first suffix that parses.
+        for start in [m.start() for m in re.finditer(r"\{", cleaned)][::-1]:
             try:
-                parsed = json.loads(json_str)
+                parsed = json.loads(cleaned[start:])
+                return parsed
             except Exception:
-                parsed = None
-        return parsed
+                continue
+        # Some backbones emit single-quoted JSON ('action': '...') which
+        # json.loads rejects; recover just the action value as a fallback.
+        match = re.search(r"""['"]action['"]\s*:\s*['"]([^'"]+)['"]""", cleaned)
+        if match:
+            return {"reasoning": "", "action": match.group(1)}
+        return None
 
 
 
@@ -116,8 +124,14 @@ Rules:
         if not isinstance(reasoning, str):
             reasoning = str(reasoning)
 
+        # Sanitize the action string: some backbones (e.g. Qwen3.5 without
+        # thinking) wrap each token in quotes or backticks ("pick up" "bag",
+        # `pick up bag`), which the env's parse_action then rejects.  Quotes
+        # and backticks never occur in a legal action, so strip them.
+        action = parsed["action"].replace('"', "").replace("`", "").strip()
+
         return {
-            "action": parsed["action"].strip(),
+            "action": action,
             "reasoning": reasoning.strip(),
         }
 
@@ -189,6 +203,7 @@ Rules:
                 temperature=self.temperature,
                 top_p=self.top_p,
                 presence_penalty=self.presence_penalty,
+                think=self.llm_think,
                 max_new_tokens=self.max_new_tokens,
                 device=self.get_device(),
             )

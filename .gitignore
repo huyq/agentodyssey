@@ -5,3 +5,8 @@
 .ipynb_checkpoints
 dist/
 output/
+build/
+logs/
+uv.lock
+scripts
+tests

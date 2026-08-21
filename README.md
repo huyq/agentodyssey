@@ -65,6 +65,29 @@ python eval.py --game_name remnant --agent LongContextAgent --llm_provider opena
 > [!NOTE]
 > **See the full parameters for evaluation &rarr; [Running Evaluations](http://agentodyssey.github.io/docs/game-apis/full-api-reference)**
 
+### Episode-local TTCL harness
+
+The test-time training plan's first phase is available as an opt-in harness. It
+keeps a structured, episode-local state ledger outside model parameters,
+records interaction events, and validates an agent's proposed action against
+the game's own legality criterion — the verb space of the default action space
+shown to the agent (a candidate is accepted when it parses as a known verb
+plus arguments). When the official `--enable_obs_valid_actions` flag is also
+set, the environment's current valid-action list is used as an additional
+literal-matching layer with canonical spelling. The harness does not modify
+the environment or read world JSON:
+
+```bash
+python eval.py --game_name remnant --agent <YourAgent> \
+    --enable_harness --max_steps 500
+```
+
+When enabled, the evaluator exposes a `harness` field in each observation and
+saves the current episode state to `run_dir/harness.json`. The harness is reset
+between games and can be resumed together with an environment config. The
+standalone API is in `harness/` (`Harness`, `StateLedger`, `EventLog`, and
+`ActionValidityMask`). It does not read world JSON or update model weights.
+
 
 ## PyPI Package
 

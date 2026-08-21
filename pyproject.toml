@@ -43,7 +43,7 @@ Repository = "https://github.com/agentodyssey/agentodyssey"
 py-modules = ["agentodyssey", "eval", "utils"]
 
 [tool.setuptools.packages.find]
-include = ["agents*", "assets*", "games*", "providers*", "tools*"]
+include = ["agents*", "assets*", "games*", "providers*", "tools*", "harness*"]
 
 [tool.setuptools.package-data]
 "*" = ["*.json", "*.jsonl", "*.js", "*.html", "*.mmd", "*.png", "*.jpg", "*.svg"]

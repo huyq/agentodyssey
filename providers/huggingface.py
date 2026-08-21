@@ -1,6 +1,6 @@
 from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModelForCausalLM, LogitsProcessorList, RepetitionPenaltyLogitsProcessor
-from typing import List
+from typing import List, Optional
 import torch
 import warnings
 from termcolor import colored
@@ -37,9 +37,11 @@ class hfLanguageModel:
         presence_penalty: float,
         max_new_tokens: int = None,
         device: str = "cuda",
+        think: bool = True,
     ):
         try:
             self.device = device
+            self.think = think
             self.logger = get_logger("hfLanguageModelLogger")
             self.tokenizer = AutoTokenizer.from_pretrained(llm_name, trust_remote_code=True)
             self.model = AutoModelForCausalLM.from_pretrained(
@@ -58,8 +60,10 @@ class hfLanguageModel:
             raise
 
     @torch.inference_mode()
-    def generate(self, user_prompt: str, system_prompt: str = None, think: bool = True) -> str:
+    def generate(self, user_prompt: str, system_prompt: str = None, think: Optional[bool] = None) -> str:
         try:
+            if think is None:
+                think = self.think
             if system_prompt:
                 messages = [
                     {"role": "system", "content": system_prompt},
